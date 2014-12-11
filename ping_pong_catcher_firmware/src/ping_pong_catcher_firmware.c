@@ -12,6 +12,7 @@
 
 #define M_PI_2		1.57079632679489661923
 #define M_PI		3.14159265358979323846
+#define U10_MAX 1023
 // solve tdoa
 #define n 3
 #define ax 0.
@@ -22,15 +23,17 @@
 #define cy 320.
 #define dx 320.
 #define dy 0.
+#define SERVO_0_DEG 51
+#define SERVO_90_DEG 103
 //#define v (int)(250000 / 50000.00 + .5) // m/s  from Anders who's an expert in waves
-#define v 250000 / 50000000.00 // m/s  from Anders who's an expert in waves
+#define v (100000 / 50000000.00f) // m/s  from Anders who's an expert in waves
 #define INTR_ID0  (XPAR_IOMODULE_INTC_MAX_INTR_SIZE - 1 - XPAR_IOMODULE_0_SYSTEM_INTC_INTERRUPT_0_INTR)
 #define INTR_ID1  (XPAR_IOMODULE_INTC_MAX_INTR_SIZE - 1 - XPAR_IOMODULE_0_SYSTEM_INTC_INTERRUPT_1_INTR)
+#define intrDelay 2500000
 volatile float x[3] = {0};
 volatile u32 hash;
 XIOModule gpi;
 XIOModule gpo;
-XIOModule uart;
 
 void isr(void *par);
 
@@ -39,18 +42,19 @@ void print(char *str);
 void solveTdoaDbl(float at, float bt, float ct, float dt);
 float map_value_linear_range(float val, float from1, float from2, float to1, float to2);
 u8 uartReadByte();
-
+u8 intrFired;
+u32 intrDelayCounter;
 int main()
 {
     init_platform();
     hash = 0;
+
     XIOModule_Initialize(&gpi, XPAR_IOMODULE_0_DEVICE_ID);
     XIOModule_Start(&gpi);
     XIOModule_Initialize(&gpo, XPAR_IOMODULE_0_DEVICE_ID);
     XIOModule_Start(&gpo);
-    // Need to call CfgInitialize to use UART Send and Recv functions
-    // int XIOModule_CfgInitialize(XIOModule *InstancePtr, XIOModule_Config *Config, u32 EffectiveAddr);
-    XIOModule_CfgInitialize(&uart, NULL, 1);
+    XIOModule_DiscreteWrite(&gpo, 1, 0x0001); // reset timing measurements
+
     // setup interrupts
     XIOModule NfdsIOMdule;
     XIOModule_Initialize(&NfdsIOMdule, XPAR_IOMODULE_0_DEVICE_ID);
@@ -59,13 +63,14 @@ int main()
     XIOModule_Connect(&NfdsIOMdule, INTR_ID1, (XInterruptHandler)isr, XPAR_IOMODULE_0_DEVICE_ID);
     XIOModule_Enable(&NfdsIOMdule, INTR_ID1);
     microblaze_enable_interrupts();
-    // debug test
-    u32 angle = (u32)(map_value_linear_range(0.7854, 0, M_PI, 0, UINT_MAX) + .5);
-    XIOModule_DiscreteWrite(&gpo, 2, angle);
-    xil_printf("angleVal = %d\r\n", angle);
+    XIOModule_DiscreteWrite(&gpo, 1, 0x0000); // enable timing measurements
+
+    intrFired = 0;
+    intrDelayCounter = 0;
 
     while(1)
     {
+    	/*
     	XIOModule_DiscreteWrite(&gpo, 1, 0x0001); // reset timing measurements
 
         u32 at = XIOModule_DiscreteRead(&gpi, 1);
@@ -73,23 +78,38 @@ int main()
     	u32 ct = XIOModule_DiscreteRead(&gpi, 3);
     	u32 dt = XIOModule_DiscreteRead(&gpi, 4);
 
-    	u32 angle = (u32)(map_value_linear_range(0.7854, 0, M_PI, 0, UINT_MAX) + .5);
+    	u32 angle = (u32)(map_value_linear_range(M_PI, 0, M_PI, SERVO_0_DEG, SERVO_90_DEG) + .5);
     	XIOModule_DiscreteWrite(&gpo, 2, angle);
     	xil_printf("angleVal = %d\r\n", angle);
     	 XIOModule_DiscreteWrite(&gpo, 2, angle);
-    	//xil_printf("at = %d, bt = %d, ct = %d, dt = %d\r\n", at, bt, ct, dt);
+    	xil_printf("at = %d, bt = %d, ct = %d, dt = %d\r\n", at, bt, ct, dt);
     	XIOModule_DiscreteWrite(&gpo, 1, 0x0000); // enable timing measurements
     	solveTdoaDbl(at, bt, ct, dt);
-    	u32 resX = (u32)(x[0] + .5);
-    	u32 resY = (u32)(x[1] + .5);
-    	//xil_printf("%d,%d,%d\r\n",hash, resX, resY);
+    	*/
+    	//u32 resX = (u32)(x[0] + .5);
+    	//u32 resY = (u32)(x[1] + .5);
+		//xil_printf("%d,%d,%d\r\n",hash, resX, resY);
 
     	if(uartReadByte() == 'r')
-    		xil_printf("%d,%d,%d\r\n",hash, x[0], x[1]);
+    	{
+    		u32 resX = (u32)(x[0] + .5);
+    		u32 resY = (u32)(x[1] + .5);
+    		xil_printf("%d,%d,%d\r\n",hash, resX, resY);
+    	}
+    	if(intrFired == 1)
+    	{
+    		intrDelayCounter++;
+    		if(intrDelayCounter > intrDelay)
+    		{
+    			XIOModule_DiscreteWrite(&gpo, 1, 0x0000); // enable timing measurements
+    			intrFired = 0;
+    			XIOModule_DiscreteWrite(&gpo, 2, (u32)(SERVO_0_DEG));
+    		}
+    	}
 
 		//printf("x = %d", x[0]);
 
-		for (int i=0; i<25000000; i++){};
+		// for (int i=0; i<25000000; i++){};
     }
     cleanup_platform();
     return 0;
@@ -97,19 +117,32 @@ int main()
 
 void isr(void *par)
 {
+	if(intrFired == 1)
+		return;
     XIOModule_DiscreteWrite(&gpo, 1, 0x0001); // reset timing measurements
     // read timings
     u32 at = XIOModule_DiscreteRead(&gpi, 1);
-	u32 bt = XIOModule_DiscreteRead(&gpi, 2);
-	u32 ct = XIOModule_DiscreteRead(&gpi, 3);
-	u32 dt = XIOModule_DiscreteRead(&gpi, 4);
+	u32 bt = XIOModule_DiscreteRead(&gpi, 4);
+	u32 ct = XIOModule_DiscreteRead(&gpi, 2);
+	u32 dt = XIOModule_DiscreteRead(&gpi, 3);
 	xil_printf("at = %d, bt = %d, ct = %d, dt = %d\r\n", at, bt, ct, dt);
 
 	solveTdoaDbl(at, bt, ct, dt); // set x to solution of tdoa
-	u32 angle = (u32)(map_value_linear_range(atanf(x[1]/x[0]), 0, M_PI, 0, UINT_MAX) + .5);
+	float radFloat = atanf(x[1]/x[0]);
+	if(radFloat < 0.0f)
+	{
+			xil_printf("Error angle at = %d\r\n", radFloat);
+			radFloat = 0.0f;
+	}
+	u32 angle = (u32)(map_value_linear_range(radFloat, 0, M_PI_2, SERVO_0_DEG, SERVO_90_DEG) + .5);
+	xil_printf("angleVal = %d\r\n", angle);
+	u32 resX = (u32)(x[0] + .5);
+	u32 resY = (u32)(x[1] + .5);
+	xil_printf("%d,%d,%d\r\n",hash, resX, resY);
 	XIOModule_DiscreteWrite(&gpo, 2, angle);
 	hash++;
-	XIOModule_DiscreteWrite(&gpo, 1, 0x0000);// enable timing measurements
+	intrFired = 1;
+	intrDelayCounter = 0;
 }
 
 void solveTdoaDbl(float at, float bt, float ct, float dt)
