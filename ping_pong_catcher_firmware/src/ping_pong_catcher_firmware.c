@@ -4,11 +4,12 @@
  */
 
 #include <stdio.h>
-#include "platform.h"
-#include "xparameters.h"
-#include "xiomodule.h" // add
+#include <string.h>
 #include <math.h>
 #include <limits.h>
+#include "platform.h"
+#include "xparameters.h"
+#include "xiomodule.h"
 
 #define M_PI_2		1.57079632679489661923
 #define M_PI		3.14159265358979323846
@@ -44,6 +45,17 @@ float map_value_linear_range(float val, float from1, float from2, float to1, flo
 u8 uartReadByte();
 u8 intrFired;
 u32 intrDelayCounter;
+
+/*
+    Bytes is a pointer to an array with enough size to fit a single float
+    Returns number of bytes
+*/
+int float_bytes_divide(float const flt, uint8_t *bytes) {
+    int len = sizeof(float);
+    memcpy(bytes, &flt, len);
+    return len;
+}
+
 int main()
 {
     init_platform();
@@ -95,7 +107,16 @@ int main()
     		u32 resX = (u32)(x[0] + .5);
     		u32 resY = (u32)(x[1] + .5);
     		xil_printf("%d,%d,%d\r\n",hash, resX, resY);
-    	}
+
+            // Re-interpret as pointer-to-int
+            uint32_t *uip = (uint32_t *)&resX;
+            XIomodule_Out32(STDIN_BASEADDRESS + XUL_TX_OFFSET, *uip);
+            print("\r\n");
+            uip = (uint32_t *)&resY;
+            XIomodule_Out32(STDIN_BASEADDRESS + XUL_TX_OFFSET, *uip);
+            print("\r\n");
+    	} else if
+
     	if(intrFired == 1)
     	{
     		intrDelayCounter++;
@@ -228,7 +249,7 @@ u8 uartReadByte()
 {
 	if(XIOModule_IsReceiveEmpty(STDIN_BASEADDRESS))
 		return 0;
-	return (u8)XIomodule_In32(STDIN_BASEADDRESS + XUL_RX_OFFSET);
+	return (u8)XIomodule_In8(STDIN_BASEADDRESS + XUL_RX_OFFSET);
 }
 
 /* integer version working
